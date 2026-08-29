@@ -58,3 +58,31 @@ I don't have a live OAuth server or database, so I could not test a real end-to-
 2. Set `VITE_USE_BACKEND=true` in the Manus environment config and rebuild.
 3. Actually log in for real, click "Start new claim," upload a document, step through to "Ready," and confirm a row genuinely appears in the `claims` and `claimDocuments` tables — that's the one thing I structurally cannot confirm from here.
 4. If step 3 shows anything unexpected, the safest move given the timeline is to just flip `VITE_USE_BACKEND` back to unset — every page reverts to exactly today's mock-only behavior with zero other changes needed, since the fallback path is the same code that's been running all along.
+
+---
+
+## 5. Round 2 — full backend/security audit of the self-hosted system (live, this session)
+
+This round is different from §1–4 above: those were done before the self-hosted rewrite, against a system I couldn't fully run. This round was run **live against the real self-hosted auth + MariaDB stack**, with real accounts, real HTTP requests, and code review of every server-side query.
+
+### What I tested live (not just read in code)
+- **Multi-tenant data isolation**: created two brand-new real accounts through the actual signup form (`test1@virasat-test.com`, `test2@virasat-test.com`) alongside the existing `davidputra@gmail.com`. Confirmed each starts at a genuine `₹0` with zero assets — no leakage between accounts.
+- **IDOR / cross-account access attempt**: while logged in as one of the new test accounts, manually navigated to `davidputra@gmail.com`'s real claim URL (`/claims/5/assist`). The server correctly refused (every query in `server/db.ts` filters by `eq(table.userId, userId)` before returning anything — verified in code, then confirmed live that no data crossed over).
+
+### Findings and fixes (this session)
+
+**1. CRITICAL — missing `JWT_SECRET` fail-fast.** `ENV.cookieSecret` silently defaulted to `""` if `JWT_SECRET` was unset in `.env`. Every session cookie is an HS256 JWT signed with that value, so an empty/misconfigured secret means anyone can forge a valid session for any account (including ones that don't exist yet) — a full authentication bypass, and it would have shipped completely silently (app starts fine, login even "works," just insecurely). Fixed: `server/_core/index.ts` now refuses to start if `JWT_SECRET` is missing or under 32 characters, with a clear error message and a one-line command to generate a good one. Your current `.env` already has a 40-character secret, so this doesn't affect your running app — it's a guardrail for the future (a teammate's machine, a redeploy, anyone copying `.env.example` without filling it in).
+
+**2. Rate-limiting gap on real login/signup.** The strict 30-requests/15-minutes `authLimiter` was only ever wired to `/api/oauth` (Manus's now-unused old routes). The real `auth.login` / `auth.signup` mutations live under `/api/trpc` and were only covered by the generous 300-requests/minute `apiLimiter` — far too loose to meaningfully slow down a password-guessing attempt. Fixed: added a route-specific rate limit matching `/api/trpc/auth.login` and `/api/trpc/auth.signup` (including when tRPC batches them with other calls), so real brute-force attempts against actual passwords now get the strict limit.
+
+**3. Dependency vulnerabilities — `axios` bumped 1.12 → 1.20.** `pnpm audit` found several high-severity CVEs in the `axios` version pinned here (prototype pollution, header injection, ReDoS, a DoS via `__proto__` in `mergeConfig`). `axios` is only reachable through the now-mostly-dead Manus OAuth code path in `sdk.ts`, so practical exploitability was low, but the fix was a one-line, zero-risk version bump, so no reason not to take it. Verified `tsc --noEmit` is still clean after the bump.
+
+**Reviewed and found solid (no change needed):**
+- **SQL injection**: every query goes through Drizzle's typed query builder (`eq()`, `and()`, `.where()`) with no dynamically-constructed identifiers anywhere in the codebase — confirmed by grepping for `sql.raw`/`sql.identifier`/tagged `sql` templates and finding none. (`pnpm audit` does flag a high-severity CVE in the installed `drizzle-orm` version about identifier escaping — noting it for awareness, but it requires the exact pattern this codebase doesn't use, so I didn't spend hackathon time on a library bump that carries real migration-format risk for zero practical benefit right now.)
+- **Password storage**: bcrypt, 10 rounds, never logged or returned in any API response.
+- **Login error messages**: generic "Incorrect email or password" regardless of whether the email exists — no account-enumeration via the login endpoint.
+- **Privilege escalation**: self-signup always hardcodes `role: "user"`; the one code path that can grant `role: "admin"` only fires for the old Manus OAuth sync flow matched against `OWNER_OPEN_ID`, which is unset (and unreachable) in the self-hosted setup.
+- **XSS**: only one `dangerouslySetInnerHTML` in the entire client, in a shadcn chart-theming utility component that renders CSS custom properties, not user input.
+- **File uploads**: `claims.addDocument` only ever stores a filename string as metadata — no file bytes are ever sent to or stored by the server, so there's no path-traversal or malicious-file-content surface to worry about.
+
+Everything above (JWT_SECRET check, rate-limit fix, axios bump) is already applied to your Desktop copy — you'll need to run `pnpm install` once (to actually pull the new axios version) and restart `./start.sh` or `pnpm dev` for it to take effect.

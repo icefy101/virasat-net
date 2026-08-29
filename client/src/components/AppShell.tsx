@@ -1,7 +1,7 @@
 // Archive of Trust: the shell is the institutional spine—compact, warm, and always explicit about the next action.
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, BookOpenCheck, BriefcaseBusiness, ChevronDown, FileText, Landmark, LogOut, Menu, Moon, Search, Settings2, ShieldCheck, Sparkles, Sun, X } from "lucide-react";
+import { Bell, BookOpenCheck, BriefcaseBusiness, ChevronDown, FileText, Inbox, Landmark, LogOut, Menu, Moon, Search, Settings2, ShieldCheck, Sparkles, Sun, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -137,7 +137,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <section className="claim-picker" role="dialog" aria-modal="true" aria-labelledby="claim-picker-title">
           <div className="picker-top"><div><div className="eyebrow"><span className="eyebrow-mark" />Start a claim</div><h2 id="claim-picker-title">Which record should we prepare?</h2><p>Choose a connected institution, then select an asset to open Claim Assist.</p></div><button className="icon-button" onClick={() => setClaimPickerOpen(false)} aria-label="Close dialog"><X size={18} /></button></div>
           <div className="picker-tabs" role="tablist" aria-label="Select a regulator">{mockRegulators.map((regulator) => <button key={regulator.id} className={`picker-tab ${selectedRegulator === regulator.id ? "picker-tab-active" : ""}`} onClick={() => setSelectedRegulator(regulator.id)} role="tab" aria-selected={selectedRegulator === regulator.id}><span className="mini-regulator" style={{ background: regulator.accent }}>{regulator.icon.slice(0, 2)}</span><span>{regulator.shortName}</span></button>)}</div>
-          <div className="picker-assets">{availableAssets.map((asset) => <button key={asset.id} className="picker-asset" disabled={startingClaim} onClick={() => startClaim(asset.id)}><span><small>{asset.type}</small><strong>{asset.provider}</strong><em>{asset.maskedNumber}</em></span><span className="picker-asset-right"><b>₹{asset.amount.toLocaleString("en-IN")}</b><span>{startingClaim ? "Starting…" : "Start assist"} <ChevronDown size={14} className="rotate-[-90deg]" /></span></span></button>)}</div>
+          <div className="picker-assets">
+            {availableAssets.length === 0 ? (
+              <div className="empty-state">
+                <Inbox size={22} />
+                <p>
+                  {backendEnabled && realAssets
+                    ? "No assets found for this regulator on your account yet."
+                    : "No assets found for this regulator."}
+                </p>
+                {backendEnabled && realAssets && realAssets.length === 0 && (
+                  <p style={{ marginTop: 6, fontSize: 11, opacity: 0.85 }}>
+                    New accounts start empty. Run <code>pnpm exec tsx scripts/seed-demo-data.ts your-email@example.com</code> to populate demo assets, or pick a different regulator tab above.
+                  </p>
+                )}
+              </div>
+            ) : (
+              availableAssets.map((asset) => <button key={asset.id} className="picker-asset" disabled={startingClaim} onClick={() => startClaim(asset.id)}><span><small>{asset.type}</small><strong>{asset.provider}</strong><em>{asset.maskedNumber}</em></span><span className="picker-asset-right"><b>₹{asset.amount.toLocaleString("en-IN")}</b><span>{startingClaim ? "Starting…" : "Start assist"} <ChevronDown size={14} className="rotate-[-90deg]" /></span></span></button>)
+            )}
+          </div>
           <div className="picker-disclaimer"><ShieldCheck size={17} /><span>This is a prototype connection. Virasat prepares and verifies documents; you submit the claim.</span></div>
         </section>
       </div>}

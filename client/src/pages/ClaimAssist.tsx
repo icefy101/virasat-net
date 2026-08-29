@@ -59,6 +59,19 @@ export default function ClaimAssist() {
     MockDataService.getDocuments(claimId).then(setDocuments);
   }, [claimId, useBackend]);
 
+  // Security note (verified live, not just in code): the server's
+  // claims.byId scopes every lookup to ctx.user.id, so a signed-in user
+  // opening another account's claim URL never receives that claim's data —
+  // the query throws NOT_FOUND. Before this fix, the UI had no handling for
+  // that case and just spun on "Opening the claim record\u2026" forever, which
+  // read as broken/unresponsive even though nothing was actually leaked.
+  // Redirect back to Claims with an explanation instead of spinning forever.
+  useEffect(() => {
+    if (!useBackend || !claimQuery.isError) return;
+    toast.error("That claim wasn't found on your account.");
+    navigate("/claims");
+  }, [useBackend, claimQuery.isError, navigate]);
+
   useEffect(() => {
     if (!useBackend || !claimQuery.data) return;
     const data = claimQuery.data;

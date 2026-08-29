@@ -32,5 +32,5 @@ function AppRoutes() {
 }
 
 export default function App() {
-  return <ErrorBoundary><ThemeProvider defaultTheme="light"><TooltipProvider><Toaster position="bottom-right" /><AppRoutes /></TooltipProvider></ThemeProvider></ErrorBoundary>;
+  return <ErrorBoundary><ThemeProvider defaultTheme="light"><TooltipProvider><Toaster position="top-right" /><AppRoutes /></TooltipProvider></ThemeProvider></ErrorBoundary>;
 }
