@@ -1,0 +1,45 @@
+// Archive of Trust: FinTwin stays secondary to claims—a compact, transparent what-if instrument, never financial advice.
+import { useEffect, useMemo, useState } from "react";
+import { ArrowUpRight, Check, ChevronRight, Info, Play, Save, SlidersHorizontal } from "lucide-react";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { MockDataService } from "@/services/dataService";
+import { chartData, mockScenarios } from "@/data/mockData";
+import { SectionEyebrow } from "@/components/StatusBadge";
+import type { FinTwinScenario } from "@/types";
+import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
+
+const rates = { FD: 0.068, "Mutual Fund": 0.10, PPF: 0.071 };
+const format = (value: number) => `₹${Math.round(value).toLocaleString("en-IN")}`;
+
+export default function FinTwin() {
+  const [amount, setAmount] = useState("500000");
+  const [investmentType, setInvestmentType] = useState<"FD" | "Mutual Fund" | "PPF">("Mutual Fund");
+  const [horizon, setHorizon] = useState(10);
+  const [hasRun, setHasRun] = useState(true);
+  const [scenarios, setScenarios] = useState<FinTwinScenario[]>(mockScenarios);
+  const numericAmount = Math.max(0, Number(amount.replace(/,/g, "")) || 0);
+  const rate = rates[investmentType];
+  const projectedValue = numericAmount * Math.pow(1 + rate, horizon);
+  const growth = projectedValue - numericAmount;
+  const projectionData = useMemo(() => Array.from({ length: horizon + 1 }, (_, year) => ({ year: year === 0 ? "Now" : `${year} yr${year === 1 ? "" : "s"}`, value: Math.round(numericAmount * Math.pow(1 + rate, year)) })), [numericAmount, rate, horizon]);
+  const backendEnabled = import.meta.env.VITE_USE_BACKEND === "true";
+  const backendInvestmentType = investmentType === "Mutual Fund" ? "MUTUAL_FUND" : investmentType;
+  const scenariosQuery = trpc.fintwin.scenarios.useQuery(undefined, { enabled: backendEnabled, retry: false });
+  const simulationQuery = trpc.fintwin.simulate.useQuery({ amount: numericAmount, investmentType: backendInvestmentType, years: horizon }, { enabled: backendEnabled && numericAmount > 0, retry: false });
+  const saveScenarioMutation = trpc.fintwin.saveScenario.useMutation({ onSuccess: () => scenariosQuery.refetch() });
+
+  useEffect(() => { MockDataService.getScenarios().then(setScenarios); }, []);
+  useEffect(() => {
+    if (!scenariosQuery.data) return;
+    setScenarios(scenariosQuery.data.map((scenario) => ({ id: String(scenario.id), name: scenario.name, amount: scenario.amount, investmentType: scenario.investmentType === "MUTUAL_FUND" ? "Mutual Fund" : scenario.investmentType as FinTwinScenario["investmentType"], horizon: scenario.years, projectedValue: scenario.projectedValue, createdAt: new Date(scenario.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) })));
+  }, [scenariosQuery.data]);
+  const resolvedProjectionData = simulationQuery.data?.values.map((point) => ({ year: point.year === 0 ? "Now" : `${point.year} yr${point.year === 1 ? "" : "s"}`, value: point.value })) ?? projectionData;
+  const resolvedProjectedValue = simulationQuery.data?.values.at(-1)?.value ?? projectedValue;
+  const runSimulation = () => { setHasRun(false); window.setTimeout(() => { setHasRun(true); toast.success("Illustrative projection updated"); }, 220); };
+  const saveScenario = async () => { const scenario: FinTwinScenario = { id: `sc_${Date.now()}`, name: `A ${horizon}-year ${investmentType} path`, amount: numericAmount, investmentType, horizon, projectedValue: resolvedProjectedValue, createdAt: "Just now" }; if (backendEnabled) { await saveScenarioMutation.mutateAsync({ name: scenario.name, amount: numericAmount, investmentType: backendInvestmentType, years: horizon, projectedValue: Math.round(resolvedProjectedValue) }); toast.success("Scenario saved to your account"); } else { const saved = await MockDataService.saveScenario(scenario); setScenarios((items) => [saved, ...items]); toast.success("Scenario saved to your mock workspace"); } };
+
+  return <div className="page-wrap"><section className="fintwin-hero animate-in"><div className="fintwin-copy"><SectionEyebrow>A quiet what-if</SectionEyebrow><h1>Meet your <em>FinTwin.</em></h1><p>Explore how a recovered amount could grow over time. This is an illustrative estimate, not financial advice or a promise of returns.</p></div><div className="fintwin-art" /></section><div className="fintwin-grid animate-in delay-1"><section className="simulator-panel"><div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}><div><SectionEyebrow>Set the assumptions</SectionEyebrow><h2>Build a scenario</h2></div><SlidersHorizontal size={19} color="#B78A4A" /></div><p>Change one input, then run the record forward.</p><div className="field-group"><label className="field-label" htmlFor="amount">Recovered amount <small>INR</small></label><div className="input-prefix"><span>₹</span><Input id="amount" value={Number(amount).toLocaleString("en-IN")} onChange={(event) => setAmount(event.target.value.replace(/,/g, ""))} inputMode="numeric" /></div></div><div className="field-group"><label className="field-label" htmlFor="investment">Illustrative route</label><select id="investment" className="select-field" value={investmentType} onChange={(event) => setInvestmentType(event.target.value as typeof investmentType)}><option>FD</option><option>Mutual Fund</option><option>PPF</option></select></div><div className="field-group"><label className="field-label" htmlFor="horizon">Time horizon <span className="range-value">{horizon} years</span></label><input id="horizon" type="range" min="1" max="20" value={horizon} onChange={(event) => setHorizon(Number(event.target.value))} /><div className="range-labels"><span>1 year</span><span>20 years</span></div></div><div className="simulator-actions"><Button className="btn-primary" onClick={runSimulation}><Play size={14} /> Run simulation</Button><Button className="btn-quiet" onClick={saveScenario}><Save size={14} /> Save scenario</Button></div><div className="disclaimer-bar" style={{ marginTop: 19 }}><Info size={16} /> Growth rates are simplified assumptions for a prototype demo.</div></section><section className="chart-panel"><div className="chart-panel-header"><div><SectionEyebrow>Projection, not prediction</SectionEyebrow><h2>What the path could look like</h2><p>Compounded annually at an illustrative {Math.round(rate * 1000) / 10}% rate.</p></div>{hasRun && <div className="projection-number"><span>Projected value</span><strong>{format(resolvedProjectedValue)}</strong></div>}</div><div className="chart-wrap">{hasRun ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={resolvedProjectionData} margin={{ top: 20, right: 8, left: -18, bottom: 0 }}><defs><linearGradient id="growthFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#B78A4A" stopOpacity={.34} /><stop offset="100%" stopColor="#B78A4A" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#e4ded1" strokeDasharray="2 5" vertical={false} /><XAxis dataKey="year" tick={{ fill: "#71816f", fontSize: 9 }} axisLine={false} tickLine={false} interval={Math.max(0, Math.ceil(horizon / 5) - 1)} /><YAxis tick={{ fill: "#71816f", fontSize: 9 }} axisLine={false} tickLine={false} tickFormatter={(value) => value >= 100000 ? `₹${Math.round(value / 100000)}L` : `₹${Math.round(value / 1000)}k`} /><Tooltip formatter={(value: number) => [format(value), "Illustrative value"]} contentStyle={{ border: "1px solid #e4ded1", borderRadius: 0, fontSize: 10, background: "#fffdf8" }} /><Area type="monotone" dataKey="value" stroke="#B78A4A" strokeWidth={2.2} fill="url(#growthFill)" /></AreaChart></ResponsiveContainer> : <div style={{ height: "100%", display: "grid", placeItems: "center", color: "var(--sage-ink)", fontSize: 11 }}>Recalculating the illustrative path…</div>}</div><div className="chart-foot"><span>Invested amount <strong style={{ color: "var(--ink)" }}>{format(numericAmount)}</strong></span><span>Estimated growth <strong style={{ color: "#B78A4A" }}>+{format(resolvedProjectedValue - numericAmount)}</strong></span><span>{horizon} year horizon</span></div></section><section className="panel scenario-panel"><div className="panel-header"><div><h3>Saved scenarios</h3><p>Keep a few possibilities side by side.</p></div><Button className="text-button" variant="ghost" onClick={() => toast("Scenario comparison is ready for the next prototype pass")}>Compare scenarios <ChevronRight size={14} /></Button></div>{scenarios.slice(0, 3).map((scenario) => <div className="scenario-row" key={scenario.id}><div><strong>{scenario.name}</strong><span>{scenario.investmentType} · {scenario.horizon} years · {scenario.createdAt}</span></div><span>{format(scenario.amount)} invested</span><span className="scenario-projection">{format(scenario.projectedValue)}</span><Check size={15} color="#7E9B83" /></div>)}</section></div></div>;
+}
