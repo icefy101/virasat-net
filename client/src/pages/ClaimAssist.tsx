@@ -8,7 +8,7 @@ import { MockDataService } from "@/services/dataService";
 import { mockAssets, mockRegulators } from "@/data/mockData";
 import { SectionEyebrow, StatusBadge } from "@/components/StatusBadge";
 import { trpc } from "@/lib/trpc";
-import type { Asset, Claim, ClaimDocumentRequirement, Document, RegulatorId } from "@/types";
+import type { Asset, Claim, ClaimDocumentRequirement, Document, DocumentStatus, RegulatorId } from "@/types";
 import { toast } from "sonner";
 
 const steps = ["Documents", "Verify", "Review", "Ready"];
@@ -111,14 +111,17 @@ export default function ClaimAssist() {
     if (useBackend) {
       try {
         const added = await addDocumentMutation.mutateAsync({ claimId: numericClaimId, type: documentName, filename: file.name });
-        // Also runs the file through the real claims.parseDocument endpoint, so
-        // the full upload -> verify pipeline is genuinely exercised end to end
-        // (that endpoint's own verification logic is still a labeled mock
-        // adapter today — see the Weak Points slide — but the call is real).
-        await parseDocumentMutation.mutateAsync({ claimId: numericClaimId, filename: file.name }).catch(() => undefined);
-        setDocuments((current) => [{ id: String(added.id), claimId: String(added.claimId), name: added.type, type: added.type, status: "Processing", uploadedDate: "Just now", filename: added.filename, required: true }, ...current]);
+        // Runs the file through the real claims.parseDocument endpoint — a
+        // genuine rule-based verification pass (file-type check, duplicate-type
+        // detection, cross-reference against the claim's real asset record),
+        // not an AI/OCR call. See docs/verification-engine.md.
+        const parsed = await parseDocumentMutation.mutateAsync({ claimId: numericClaimId, filename: file.name }).catch(() => undefined);
+        const statusFromApi: DocumentStatus = parsed?.verificationStatus === "VERIFIED" ? "Verified" : parsed?.verificationStatus === "MISMATCH" ? "Mismatch" : parsed?.verificationStatus === "REJECTED" ? "Rejected" : "Processing";
+        setDocuments((current) => [{ id: String(added.id), claimId: String(added.claimId), name: added.type, type: added.type, status: statusFromApi, uploadedDate: "Just now", filename: added.filename, required: true }, ...current]);
         setUploading(false);
-        toast.success("Document added to your claim record");
+        if (statusFromApi === "Mismatch") toast.warning(parsed?.mismatches?.[0] ?? "This document needs a second look — possible duplicate.");
+        else if (statusFromApi === "Rejected") toast.error((parsed?.extractedFields as { reason?: string } | undefined)?.reason ?? "That file couldn't be verified — try a different format.");
+        else toast.success("Document added and verified against your claim record");
         return;
       } catch (error) {
         console.error("[ClaimAssist] Real upload failed, falling back to the mock flow:", error);

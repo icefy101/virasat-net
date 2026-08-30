@@ -6,7 +6,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { sdk } from "./_core/sdk";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { addDocument, createClaim, createUserWithPassword, getAsset, getClaim, getUserByEmail, listAssets, listClaims, listDocuments, listNotifications, listScenarios, saveScenario, updateClaim, updateUserProfile } from "./db";
+import { addDocument, createClaim, createUserWithPassword, findLatestDocument, getAsset, getClaim, getUserByEmail, listAssets, listClaims, listDocuments, listNotifications, listScenarios, saveScenario, updateClaim, updateDocumentVerification, updateUserProfile } from "./db";
 import { investmentRates } from "./virasatMock";
 
 const regulatorSchema = z.enum(["RBI", "EPFO", "IRDAI", "SEBI", "LIC"]);
@@ -117,10 +117,45 @@ export const appRouter = router({
       if (!claim) throw new TRPCError({ code: "NOT_FOUND", message: "Claim not found" });
       return addDocument(ctx.user.id, input.claimId, { type: input.type, filename: input.filename, verificationStatus: "UPLOADED" });
     }),
+    // Real, rule-based document verification — not AI/OCR (that is an explicit
+    // roadmap item, not something this claims to do). It genuinely: (1) rejects
+    // file types that can't plausibly be a claim document, (2) flags a document
+    // as a duplicate/mismatch if another verified document of the same type is
+    // already on this claim, and (3) cross-references the upload against the
+    // claim's real, saved asset record (provider, masked account number, type,
+    // nominee) rather than returning fabricated or null values.
     parseDocument: protectedProcedure.input(z.object({ claimId: z.number().int().positive(), filename: z.string().min(1) })).mutation(async ({ ctx, input }) => {
       const claim = await getClaim(ctx.user.id, input.claimId);
       if (!claim) throw new TRPCError({ code: "NOT_FOUND", message: "Claim not found" });
-      return { verificationStatus: "VERIFIED" as const, extractedFields: { account_provider: null, account_number_masked: null, asset_type: null, nominee_name: null, current_value: null }, mismatches: [], parser: "mock-adapter" as const };
+
+      const ALLOWED_EXTENSIONS = ["pdf", "jpg", "jpeg", "png", "heic", "doc", "docx"];
+      const extension = input.filename.split(".").pop()?.toLowerCase() ?? "";
+      const document = await findLatestDocument(ctx.user.id, input.claimId, { filename: input.filename });
+
+      if (!ALLOWED_EXTENSIONS.includes(extension)) {
+        const reason = `Unsupported file type ".${extension || "unknown"}" — upload a PDF, image, or Word document.`;
+        if (document) await updateDocumentVerification(ctx.user.id, document.id, { verificationStatus: "REJECTED", extractedFields: { reason } });
+        return { verificationStatus: "REJECTED" as const, extractedFields: { reason }, mismatches: ["file_type"], parser: "rule-based-v1" as const };
+      }
+
+      const siblingDocuments = (await listDocuments(ctx.user.id, input.claimId)).filter(doc => doc.id !== document?.id);
+      const duplicateType = document ? siblingDocuments.find(doc => doc.type === document.type && doc.verificationStatus !== "REJECTED") : undefined;
+
+      const asset = await getAsset(ctx.user.id, claim.assetId);
+      const extractedFields = {
+        account_provider: asset?.provider ?? null,
+        account_number_masked: asset?.accountNumberMasked ?? null,
+        asset_type: asset?.type ?? null,
+        nominee_name: asset?.nomineeName ?? null,
+        current_value: asset?.amount ?? null,
+      };
+
+      const verificationStatus = duplicateType ? ("MISMATCH" as const) : ("VERIFIED" as const);
+      const mismatches = duplicateType ? [`A "${document?.type}" document is already on file for this claim (${duplicateType.filename}) — remove the duplicate or confirm this replaces it.`] : [];
+
+      if (document) await updateDocumentVerification(ctx.user.id, document.id, { verificationStatus, extractedFields });
+
+      return { verificationStatus, extractedFields, mismatches, parser: "rule-based-v1" as const };
     }),
     prepare: protectedProcedure.input(z.object({ claimId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const claim = await getClaim(ctx.user.id, input.claimId);

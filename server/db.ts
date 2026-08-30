@@ -180,6 +180,22 @@ export async function addDocument(userId: number, claimId: number, input: { type
   return { id: result[0]?.id, claimId, userId, ...input, verificationStatus: input.verificationStatus ?? "UPLOADED" };
 }
 
+// Finds the most recent document of this type on a claim (used by
+// parseDocument's real, rule-based checks below to look up what it just
+// inserted via addDocument, and to spot duplicate uploads of the same type).
+export async function findLatestDocument(userId: number, claimId: number, filters: { type?: string; filename?: string } = {}) {
+  const docs = await listDocuments(userId, claimId);
+  return docs.find(doc => (!filters.type || doc.type === filters.type) && (!filters.filename || doc.filename === filters.filename));
+}
+
+export async function updateDocumentVerification(userId: number, documentId: number, input: { verificationStatus: typeof claimDocuments.$inferInsert.verificationStatus; extractedFields?: Record<string, unknown> }) {
+  const db = await getDb();
+  if (!db) return { id: documentId, ...input };
+  await db.update(claimDocuments).set({ verificationStatus: input.verificationStatus, extractedFields: input.extractedFields }).where(and(eq(claimDocuments.userId, userId), eq(claimDocuments.id, documentId)));
+  const result = await db.select().from(claimDocuments).where(and(eq(claimDocuments.userId, userId), eq(claimDocuments.id, documentId))).limit(1);
+  return result[0];
+}
+
 export async function listNotifications(userId: number) {
   const db = await getDb();
   if (!db) return mockNotifications;
